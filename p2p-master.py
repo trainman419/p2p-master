@@ -27,12 +27,32 @@
 
 import os
 import sys
+import socket
+import yaml
 
 from SimpleXMLRPCServer import SimpleXMLRPCServer,SimpleXMLRPCRequestHandler
 
-class Master(SimpleXMLRPCRequestHandler):
-   def __init__(self):
-      self.foo = 0
+def parse_uri(uri):
+   # strip http://
+   base = uri.lstrip('http://')
+   # strip trailing path /...
+   hostport = base.partition('/')[0]
+   # split host and port number
+   (host,sep, port) = hostport.partition(':')
+   return host, port
+
+class Master:
+   def __init__(self, configfile):
+      config = yaml.load(open(configfile, "r"))
+      name = socket.getfqdn()
+      self.params = {}
+      self.publishers = { name: {} }
+      self.subscribers = { name: {} }
+      self.name = name
+      self.peers = config['peers']
+      print "Peers: "
+      for p in self.peers:
+         print p
 
    # stub
    def shutdown(self, caller_id, msg=''):
@@ -49,13 +69,22 @@ class Master(SimpleXMLRPCRequestHandler):
    def deleteParam(self, caller_id, key):
       return 1, "", 0
 
-   # stub
    def setParam(self, caller_id, key, value):
+      path = key.split('/')
+      param = self.params
+      for p in path[1:-1]:
+         if not p in param:
+            param[p] = {}
+         param = param[p]
+      param[path[-1]] = value
       return 1, "", 0
 
-   # stub
    def getParam(self, caller_id, key):
-      return 1, "", 0
+      path = key.split('/')
+      param = self.params
+      for p in path[1:]:
+         param = param[p]
+      return 1, "", param
    
    # stub
    def searchParam(self, caller_id, key):
@@ -80,7 +109,12 @@ class Master(SimpleXMLRPCRequestHandler):
    # TODO: stub
    def registerSubscriber(self, caller_id, topic, topic_type, caller_api):
       print "registerSubscriber"
-      return 1, "Subscribed to [%s]"%topic, []
+      publishers = []
+      if topic in self.publishers[self.name]:
+         for p in self.publishers[self.name][topic]:
+            publishers.append("http://localhost:%d/"%p)
+      print publishers
+      return 1, "Subscribed to [%s]"%topic, publishers
    
    # TODO: stub
    def unregisterSubscriber(self, caller_id, topic, caller_api):
@@ -90,17 +124,28 @@ class Master(SimpleXMLRPCRequestHandler):
    # TODO: stub
    def registerPublisher(self, caller_id, topic, topic_type, caller_api):
       print "registerPublisher"
+      host,port =  parse_uri(caller_api)
+      if not topic in self.publishers[self.name]:
+         self.publishers[self.name][topic] = set()
+      self.publishers[self.name][topic].add(int(port))
+      # TODO: notify subscribers
       return 1, "Registered [%s] as publisher of [%s]"%(caller_id, topic), []
 
    # TODO: stub
    def unregisterPublisher(self, caller_id, topic, caller_api):
       print "unregisterPublisher"
+      host,port = parse_uri(caller_api)
+      if topic in self.publishers[self.name]:
+         self.publishers[self.name][topic].discard(int(port))
       return 1
 
 
 def main():
-   server = SimpleXMLRPCServer(("localhost", 11311))
-   master = Master()
+   configfile = sys.argv[1]
+   port = int(parse_uri(os.getenv("ROS_MASTER_URI"))[1])
+   print "Binding to port %d"%port
+   server = SimpleXMLRPCServer(("", port)) # bind to port 11311, all addresses
+   master = Master(configfile)
    server.register_multicall_functions()
    server.register_instance(master)
    print "Ready?"
