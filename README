@@ -1,0 +1,5 @@
+Peer-to-Peer ROS Master
+
+This project is a proof-of-concept of a peer-to-peer ROS Master. The intention is to determine if it is possible to improve or remove the need to do network configuration for most ROS setups.
+
+Warning: this project is "Wild Code" and is not a fully-functional ROS master. It will bite you if you try to use it without understanding the limitations. Read the code for more details.
