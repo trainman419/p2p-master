@@ -15,7 +15,10 @@
 #
 # 
 # For this proof-of-concept master, the following features are implemented:
-# * (none)
+# * Parameter set and get
+# * getPid
+# * register and unregister publishers
+# * register subscribers
 #
 # Running:
 #  set ROS_MASTER_URI as appropriate
@@ -29,8 +32,12 @@ import os
 import sys
 import socket
 import yaml
+import threading
+import time
 
 from SimpleXMLRPCServer import SimpleXMLRPCServer,SimpleXMLRPCRequestHandler
+#from SocketServer import ThreadingUDPServer,DatagramRequestHandler
+from SocketServer import ThreadingTCPServer,StreamRequestHandler
 
 def parse_uri(uri):
    # strip http://
@@ -46,6 +53,19 @@ class RQ(SimpleXMLRPCRequestHandler):
       print client_address
       SimpleXMLRPCRequestHandler.__init__(self, request, client_address, server)
 
+class PeerHandler(StreamRequestHandler):
+   def setup(self):
+      print "PeerHandler setup"
+      pass
+
+   def handle(self):
+      print "PeerHandler handle"
+      pass
+
+   def finish(self):
+      print "PeerHandler finish"
+      pass
+
 class Master:
    def __init__(self, configfile):
       config = yaml.load(open(configfile, "r"))
@@ -54,13 +74,42 @@ class Master:
       self.publishers = { name: {} }
       self.subscribers = { name: {} }
       self.name = name
-      self.peers = config['peers']
+      self.static_peers = config['peers']
+      self.peers = {}
+      self.peer_connections = {}
+      self.done = False
+
       print "Peers: "
-      for p in self.peers:
+      for p in self.static_peers:
          print p
+
+      self.peer_server = ThreadingTCPServer(("", int(config['port'])), 
+         PeerHandler)
+      self.peer_server_t = threading.Thread(target = self.peer_server.serve_forever)
+      self.peer_server_t.start()
+
+      self.ping_thread = threading.Thread(target = self.ping_peers)
+      self.ping_thread.start()
+
+
+   # thread that periodically pings and cleans up peers
+   def ping_peers(self):
+      while not self.done:
+         for p in self.peers:
+            # send a ping
+            print "Pinging %s"%p
+
+         for p in self.static_peers:
+            if not p in self.peers:
+               # try to establish contact with peer
+               print "Trying to contact %s"%p
+         
+         # sleep
+         time.sleep(1)
 
    # stub
    def shutdown(self, caller_id, msg=''):
+      self.done = True
       return 1, "shutdown", 0
 
    # stub
@@ -111,7 +160,6 @@ class Master:
    def getParamNames(self, caller_id):
       return 1, "Parameter names", []
 
-   # TODO: stub
    def registerSubscriber(self, caller_id, topic, topic_type, caller_api):
       print "registerSubscriber"
       publishers = []
@@ -119,6 +167,7 @@ class Master:
          for p in self.publishers[self.name][topic]:
             publishers.append("http://localhost:%d/"%p)
       print publishers
+      # TODO: add to list of subscribers
       return 1, "Subscribed to [%s]"%topic, publishers
    
    # TODO: stub
@@ -126,7 +175,6 @@ class Master:
       print "unregisterSubscriber"
       return 1
 
-   # TODO: stub
    def registerPublisher(self, caller_id, topic, topic_type, caller_api):
       print "registerPublisher"
       host,port =  parse_uri(caller_api)
@@ -136,7 +184,6 @@ class Master:
       # TODO: notify subscribers
       return 1, "Registered [%s] as publisher of [%s]"%(caller_id, topic), []
 
-   # TODO: stub
    def unregisterPublisher(self, caller_id, topic, caller_api):
       print "unregisterPublisher"
       host,port = parse_uri(caller_api)
@@ -157,6 +204,8 @@ def main():
    try:
       server.serve_forever()
    except:
+      # TODO: kill peer server
+      master.shutdown('local')
       print "Done"
 
 if __name__ == '__main__':

@@ -1,2 +1,3 @@
-peers: [ "localhost:11312"
+port: 11411
+peers: [ "localhost:11412"
 ]
