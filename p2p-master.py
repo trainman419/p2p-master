@@ -41,6 +41,11 @@ def parse_uri(uri):
    (host,sep, port) = hostport.partition(':')
    return host, port
 
+class RQ(SimpleXMLRPCRequestHandler):
+   def __init__(self, request, client_address, server):
+      print client_address
+      SimpleXMLRPCRequestHandler.__init__(self, request, client_address, server)
+
 class Master:
    def __init__(self, configfile):
       config = yaml.load(open(configfile, "r"))
@@ -144,12 +149,15 @@ def main():
    configfile = sys.argv[1]
    port = int(parse_uri(os.getenv("ROS_MASTER_URI"))[1])
    print "Binding to port %d"%port
-   server = SimpleXMLRPCServer(("", port)) # bind to port 11311, all addresses
+   server = SimpleXMLRPCServer(("", port), RQ) # bind to port 11311, all addresses
    master = Master(configfile)
    server.register_multicall_functions()
    server.register_instance(master)
    print "Ready?"
-   server.serve_forever()
+   try:
+      server.serve_forever()
+   except:
+      print "Done"
 
 if __name__ == '__main__':
    main()
