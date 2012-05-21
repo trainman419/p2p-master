@@ -1,0 +1,3 @@
+port: 11412
+peers: [ "localhost:11411"
+]
