@@ -19,6 +19,8 @@
 # * getPid
 # * register and unregister publishers
 # * register subscribers
+# * coordinate with a static list of peers
+# * exchange publisher lists with static peers
 #
 # Running:
 #  set ROS_MASTER_URI as appropriate
@@ -225,8 +227,38 @@ class Master:
       return 1, "Parameter names", []
 
    def registerSubscriber(self, caller_id, topic, topic_type, caller_api):
-      print "registerSubscriber"
+      print "registerSubscriber: %s"%topic
       publishers = []
+# This _ought_ to allow local clients to subscribe to remote systems by 
+#  specifying a remote prefix and a topic name, but it fails because the
+#  subscriber and publisher don't agree on the topic name
+# This can probably be fixed by proxying topics through the masters, but
+#  that isn't required for the proof-of-concept
+#      path = topic.split('/')[1:]
+#
+#      if len(path) > 1:
+#         prefix = path[0]
+#         remote_topic = "/%s"%('/'.join(path[1:]))
+#         print "looking in remote prefix %s"%prefix
+#         for peer in self.publishers:
+#            if self.peer_names[peer] == prefix:
+#               print "Found peer %s"%peer
+#               print "Looking for remote topic %s"%remote_topic
+#               if remote_topic in self.publishers[peer]:
+#                  print "Found remote topic %s"%remote_topic
+#                  for p in self.publishers[peer][remote_topic]:
+#                     host = peer
+#                     if peer == self.name:
+#                        host = "localhost"
+#                     publishers.append("http://%s:%d/"%(host, p))
+#      else:
+#         print "local subscribe"
+#      if len(publishers) == 0:
+#         print "looking in local topics"
+#         if topic in self.publishers[self.name]:
+#            for p in self.publishers[self.name][topic]:
+#               publishers.append("http://%s:%d/"%("localhost", p))
+      # look for topics anywhere with the given name
       for peer in self.publishers:
          if topic in self.publishers[peer]:
             for p in self.publishers[peer][topic]:
@@ -264,14 +296,12 @@ class Master:
       pub = []
       for peer in self.publishers:
          for topic in self.publishers[peer]:
-            t = []
+            ports = []
+            for p in self.publishers[peer][topic]:
+               ports.append(p)
             if peer == self.name:
-               t = [topic, []]
-            else:
-               t = ["/%s%s"%(self.peer_names[peer], topic), []]
-            for port in self.publishers[peer][topic]:
-               t[1].append(port)
-            pub.append(t)
+               pub.append([topic, ports])
+            pub.append(["/%s%s"%(self.peer_names[peer], topic), ports])
       sub = []
       ser = []
       return 1, "current system state", [pub, sub, ser]
