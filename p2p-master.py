@@ -34,6 +34,7 @@ import socket
 import yaml
 import threading
 import time
+import select
 
 from SimpleXMLRPCServer import SimpleXMLRPCServer,SimpleXMLRPCRequestHandler
 #from SocketServer import ThreadingUDPServer,DatagramRequestHandler
@@ -47,24 +48,6 @@ def parse_uri(uri):
    # split host and port number
    (host,sep, port) = hostport.partition(':')
    return host, port
-
-class RQ(SimpleXMLRPCRequestHandler):
-   def __init__(self, request, client_address, server):
-      print client_address
-      SimpleXMLRPCRequestHandler.__init__(self, request, client_address, server)
-
-class PeerHandler(StreamRequestHandler):
-   def setup(self):
-      print "PeerHandler setup"
-      pass
-
-   def handle(self):
-      print "PeerHandler handle"
-      pass
-
-   def finish(self):
-      print "PeerHandler finish"
-      pass
 
 class Master:
    def __init__(self, configfile):
@@ -83,18 +66,29 @@ class Master:
       for p in self.static_peers:
          print p
 
-      self.peer_server = ThreadingTCPServer(("", int(config['port'])), 
-         PeerHandler)
-      self.peer_server_t = threading.Thread(target = self.peer_server.serve_forever)
-      self.peer_server_t.start()
+      self.peer_socket = socket.socket()
+      self.peer_socket.bind(('', config['port']))
+      self.peer_socket.listen(10)
 
-      self.ping_thread = threading.Thread(target = self.ping_peers)
-      self.ping_thread.start()
+      self.peer_thread = threading.Thread(target = self.peer_talk)
+      self.peer_thread.start()
 
 
    # thread that periodically pings and cleans up peers
-   def ping_peers(self):
+   def peer_talk(self):
       while not self.done:
+         # sleep
+         time.sleep(1)
+
+         # accept incoming connections
+         r,w,e = select.select([self.peer_socket], [], [], 1.0)
+         while self.peer_socket in r:
+            client = self.peer_socket.accept()
+            print client
+            remote = "%s:%d"%client[1]
+            print remote
+            r,w,e = select.select([self.peer_socket], [], [], 1.0)
+
          for p in self.peers:
             # send a ping
             print "Pinging %s"%p
@@ -103,9 +97,18 @@ class Master:
             if not p in self.peers:
                # try to establish contact with peer
                print "Trying to contact %s"%p
-         
-         # sleep
-         time.sleep(1)
+               host,sep,port = p.partition(':')
+               try:
+                  #sock = socket.create_connection((host,port))
+                  for sa in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+                     print sa
+                     sock = self.peer_socket.connect(sa)
+                     if sock:
+                        self.peers[p] = sock
+                     else:
+                        print "Failed to contact %s"%p
+               finally:
+                  print "Failed to contact %s"%p
 
    # stub
    def shutdown(self, caller_id, msg=''):
@@ -196,7 +199,7 @@ def main():
    configfile = sys.argv[1]
    port = int(parse_uri(os.getenv("ROS_MASTER_URI"))[1])
    print "Binding to port %d"%port
-   server = SimpleXMLRPCServer(("", port), RQ) # bind to port 11311, all addresses
+   server = SimpleXMLRPCServer(("", port)) # bind to port 11311, all addresses
    master = Master(configfile)
    server.register_multicall_functions()
    server.register_instance(master)
