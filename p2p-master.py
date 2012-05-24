@@ -53,6 +53,7 @@ class Master:
    def __init__(self, configfile):
       config = yaml.load(open(configfile, "r"))
       name = socket.getfqdn()
+      name = name.replace(".", "_") # replace periods with underscores
       self.params = {}
       self.publishers = { name: {} }
       self.subscribers = { name: {} }
@@ -60,15 +61,20 @@ class Master:
       self.static_peers = config['peers']
       self.peers = {}
       self.peer_connections = {}
+      self.peer_names = { name: name }
       self.done = False
 
       print "Peers: "
       for p in self.static_peers:
          print p
 
-      self.peer_socket = socket.socket()
-      self.peer_socket.bind(('', config['port']))
-      self.peer_socket.listen(10)
+      try:
+         self.peer_socket = socket.socket()
+         self.peer_socket.bind(('', config['port']))
+         self.peer_socket.listen(10)
+      except:
+         print "Failed to bind to multimaster socket"
+         sys.exit(-1)
 
       self.peer_thread = threading.Thread(target = self.peer_talk)
       self.peer_thread.start()
@@ -86,28 +92,83 @@ class Master:
             client = self.peer_socket.accept()
             print client
             remote = "%s:%d"%client[1]
+            remote = client[1][0]
+            sock = client[0]
+            sock.setblocking(0)
+            sock.send(yaml.dump([self.name, self.publishers[self.name]]))
             print remote
+            if remote not in self.peers:
+               self.peers[remote] = []
+            self.peers[remote].append([sock, time.time()])
             r,w,e = select.select([self.peer_socket], [], [], 1.0)
 
+         # ping peers and read incoming data
+         dead_peers = []
          for p in self.peers:
             # send a ping
             print "Pinging %s"%p
-
-         for p in self.static_peers:
-            if not p in self.peers:
-               # try to establish contact with peer
-               print "Trying to contact %s"%p
-               host,sep,port = p.partition(':')
+            for i,s in enumerate(self.peers[p]):
+               # Send Ping
                try:
-                  #sock = socket.create_connection((host,port))
-                  for sa in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
-                     print sa
-                     sock = self.peer_socket.connect(sa)
-                     if sock:
-                        self.peers[p] = sock
-                     else:
-                        print "Failed to contact %s"%p
-               finally:
+                  s[0].send(yaml.dump([self.name, self.publishers[self.name]]))
+               except:
+                  # if we had trouble sending a ping, close the socket
+                  try:
+                     s[0].close()
+                  except:
+                     pass
+                  del self.peers[p][i]
+
+               # Receive data (pings + other)
+               try:
+                  r = s[0].recv(4096)
+               except socket.error:
+                  pass
+               else:
+                  if len(r) > 0:
+                     print "Got data from %s"%p
+                     print r
+                     if len(r) > 1:
+                        data = yaml.load(r)
+                        self.peer_names[p] = data[0]
+                        self.publishers[p] = data[1]
+                     s[1] = time.time()
+
+               # check timeout
+               if s[1] + 15 < time.time():
+                  print s, " timed out"
+                  s[0].close()
+                  del self.peers[p][i]
+
+            # if we have no more connections to this peer, consider it dead
+            if len(self.peers[p]) < 1:
+               print "Connection to %s lost."%p
+               dead_peers.append(p)
+
+         # delete peers that were dead
+         for d in dead_peers:
+            del self.peers[d]
+
+         # try to contact our static peers
+         for p in self.static_peers:
+            # try to establish contact with peer
+            host,sep,port = p.partition(':')
+            try:
+               host = socket.gethostbyname(host)
+            except:
+               pass # ignore failures in name resolution
+            if host not in self.peers:
+               try:
+                  sock = socket.create_connection((host,port))
+                  if sock:
+                     sock.setblocking(0)
+                     sock.send(yaml.dump([self.name, self.publishers[self.name]]))
+                     if host not in self.peers:
+                        self.peers[host] = []
+                     self.peers[host].append([sock, time.time()])
+                  else:
+                     print "Failed to contact %s"%p
+               except:
                   print "Failed to contact %s"%p
 
    # stub
@@ -166,9 +227,13 @@ class Master:
    def registerSubscriber(self, caller_id, topic, topic_type, caller_api):
       print "registerSubscriber"
       publishers = []
-      if topic in self.publishers[self.name]:
-         for p in self.publishers[self.name][topic]:
-            publishers.append("http://localhost:%d/"%p)
+      for peer in self.publishers:
+         if topic in self.publishers[peer]:
+            for p in self.publishers[peer][topic]:
+               host = peer
+               if peer == self.name:
+                  host = "localhost"
+               publishers.append("http://%s:%d/"%(host, p))
       print publishers
       # TODO: add to list of subscribers
       return 1, "Subscribed to [%s]"%topic, publishers
@@ -181,10 +246,11 @@ class Master:
    def registerPublisher(self, caller_id, topic, topic_type, caller_api):
       print "registerPublisher"
       host,port =  parse_uri(caller_api)
-      if not topic in self.publishers[self.name]:
+      if topic not in self.publishers[self.name]:
          self.publishers[self.name][topic] = set()
       self.publishers[self.name][topic].add(int(port))
       # TODO: notify subscribers
+      # TODO: notify peers
       return 1, "Registered [%s] as publisher of [%s]"%(caller_id, topic), []
 
    def unregisterPublisher(self, caller_id, topic, caller_api):
@@ -193,6 +259,22 @@ class Master:
       if topic in self.publishers[self.name]:
          self.publishers[self.name][topic].discard(int(port))
       return 1
+
+   def getSystemState(self, caller_id):
+      pub = []
+      for peer in self.publishers:
+         for topic in self.publishers[peer]:
+            t = []
+            if peer == self.name:
+               t = [topic, []]
+            else:
+               t = ["/%s%s"%(self.peer_names[peer], topic), []]
+            for port in self.publishers[peer][topic]:
+               t[1].append(port)
+            pub.append(t)
+      sub = []
+      ser = []
+      return 1, "current system state", [pub, sub, ser]
 
 
 def main():
